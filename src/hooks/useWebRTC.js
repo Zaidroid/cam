@@ -29,17 +29,43 @@ const useWebRTC = (localStream, signalingService) => {
   // Ref to ensure peer connection is created only once or managed properly
   const pcRef = useRef(null);
 
+  // Cleanup function used in multiple places
+  const closeCurrentConnection = useCallback(() => {
+    if (pcRef.current) {
+      console.log('useWebRTC: Closing existing PeerConnection.');
+      pcRef.current.getSenders().forEach(sender => {
+        if (sender.track && sender.track.readyState === 'live') { // Check if track is live
+          sender.track.stop(); // Stop tracks associated with this PC
+        }
+      });
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    setRemoteStream(null);
+    setIsConnected(false);
+    setIsConnecting(false);
+    setPeerConnection(null); // Also update state if you use it elsewhere
+  }, []);
+
+
   // Initialize PeerConnection
   const initializePeerConnection = useCallback(() => {
+    // If localStream is not yet available, don't proceed.
     if (!localStream) {
-      console.warn('useWebRTC: Local stream not available yet.');
+      console.warn('useWebRTC: Local stream not available for PeerConnection initialization.');
+      if (pcRef.current) { // If a PC exists (e.g. from a previous attempt with a stream that's now gone)
+        closeCurrentConnection();
+      }
       return null;
     }
-    if (pcRef.current) {
-        console.log('useWebRTC: PeerConnection already exists.');
-        return pcRef.current;
-    }
 
+    // If a PeerConnection already exists, close it before creating a new one to ensure clean state.
+    // This might happen if initializePeerConnection is called again for some reason.
+    if (pcRef.current) {
+      console.log('useWebRTC: PeerConnection already exists. Closing it before re-initializing.');
+      closeCurrentConnection();
+    }
+    
     console.log('useWebRTC: Initializing new PeerConnection with ICE servers:', ICE_SERVERS);
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     pcRef.current = pc;
@@ -87,23 +113,24 @@ const useWebRTC = (localStream, signalingService) => {
       pc.addTrack(track, localStream);
     });
     
-    setPeerConnection(pc);
+    setPeerConnection(pc); // Keep state in sync if needed, though pcRef is primary
     return pc;
-  }, [localStream, signalingService]);
+  }, [localStream, signalingService, closeCurrentConnection]); // Added closeCurrentConnection
 
 
   // Function to create an offer
   const createOffer = async () => {
-    if (!pcRef.current || !signalingService) {
-        console.error('useWebRTC: PeerConnection or signaling service not available for createOffer');
+    const currentPC = pcRef.current; // Work with a stable reference
+    if (!currentPC || !signalingService) {
+        console.error('useWebRTC: PeerConnection or signaling service not available for createOffer. PC:', currentPC, 'Signaling:', !!signalingService);
         return;
     }
     try {
       console.log('useWebRTC: Creating offer...');
-      const offer = await pcRef.current.createOffer();
-      await pcRef.current.setLocalDescription(offer);
+      const offer = await currentPC.createOffer();
+      await currentPC.setLocalDescription(offer);
       console.log('useWebRTC: Offer created and set as local description. Sending offer.');
-      signalingService.sendSignal({ type: 'offer', sdp: pcRef.current.localDescription });
+      signalingService.sendSignal({ type: 'offer', sdp: currentPC.localDescription });
     } catch (error) {
       console.error('useWebRTC: Error creating offer:', error);
     }
@@ -111,18 +138,19 @@ const useWebRTC = (localStream, signalingService) => {
 
   // Function to handle a received offer and create an answer
   const handleOffer = async (offerSdp) => {
-    if (!pcRef.current || !signalingService) {
-        console.error('useWebRTC: PeerConnection or signaling service not available for handleOffer');
+    const currentPC = pcRef.current; // Work with a stable reference
+    if (!currentPC || !signalingService) {
+        console.error('useWebRTC: PeerConnection or signaling service not available for handleOffer. PC:', currentPC, 'Signaling:', !!signalingService);
         return;
     }
     try {
       console.log('useWebRTC: Received offer. Setting remote description.');
-      await pcRef.current.setRemoteDescription(new RTCSessionDescription(offerSdp));
+      await currentPC.setRemoteDescription(new RTCSessionDescription(offerSdp));
       console.log('useWebRTC: Creating answer...');
-      const answer = await pcRef.current.createAnswer();
-      await pcRef.current.setLocalDescription(answer);
+      const answer = await currentPC.createAnswer();
+      await currentPC.setLocalDescription(answer);
       console.log('useWebRTC: Answer created and set as local description. Sending answer.');
-      signalingService.sendSignal({ type: 'answer', sdp: pcRef.current.localDescription });
+      signalingService.sendSignal({ type: 'answer', sdp: currentPC.localDescription });
     } catch (error) {
       console.error('useWebRTC: Error handling offer:', error);
     }
@@ -130,13 +158,14 @@ const useWebRTC = (localStream, signalingService) => {
 
   // Function to handle a received answer
   const handleAnswer = async (answerSdp) => {
-    if (!pcRef.current) {
-        console.error('useWebRTC: PeerConnection not available for handleAnswer');
+    const currentPC = pcRef.current; // Work with a stable reference
+    if (!currentPC) {
+        console.error('useWebRTC: PeerConnection not available for handleAnswer. PC:', currentPC);
         return;
     }
     try {
       console.log('useWebRTC: Received answer. Setting remote description.');
-      await pcRef.current.setRemoteDescription(new RTCSessionDescription(answerSdp));
+      await currentPC.setRemoteDescription(new RTCSessionDescription(answerSdp));
     } catch (error) {
       console.error('useWebRTC: Error handling answer:', error);
     }
@@ -144,57 +173,43 @@ const useWebRTC = (localStream, signalingService) => {
 
   // Function to handle a received ICE candidate
   const handleCandidate = async (candidate) => {
-    if (!pcRef.current) {
-        console.error('useWebRTC: PeerConnection not available for handleCandidate');
+    const currentPC = pcRef.current; // Work with a stable reference
+    if (!currentPC) {
+        console.error('useWebRTC: PeerConnection not available for handleCandidate. PC:', currentPC);
         return;
     }
     try {
       if (candidate) {
         console.log('useWebRTC: Received ICE candidate. Adding candidate.');
-        await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        await currentPC.addIceCandidate(new RTCIceCandidate(candidate));
       }
     } catch (error) {
       console.error('useWebRTC: Error adding received ICE candidate:', error);
     }
   };
   
-  // Cleanup
-  const closeConnection = useCallback(() => {
-    if (pcRef.current) {
-      console.log('useWebRTC: Closing PeerConnection.');
-      pcRef.current.getSenders().forEach(sender => {
-        if (sender.track) {
-          sender.track.stop();
-        }
-      });
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    setRemoteStream(null);
-    setIsConnected(false);
-    setIsConnecting(false);
-    setPeerConnection(null);
-  }, []);
+  // Expose closeCurrentConnection as closeConnection for external use
+  const closeConnection = closeCurrentConnection;
 
   useEffect(() => {
-    // This effect is primarily for cleanup when the component unmounts or dependencies change
+    // This effect is primarily for cleanup when the component unmounts
     return () => {
-      closeConnection();
+      closeConnection(); // Use the consistent cleanup function
     };
-  }, [closeConnection]);
+  }, [closeConnection]); // Dependency on closeConnection (which itself is a useCallback)
 
 
   return {
-    peerConnection: pcRef.current, // Expose the ref's current value
+    // peerConnection: pcRef.current, // Avoid exposing pcRef directly if state is managed internally
     remoteStream,
     isConnecting,
     isConnected,
-    initializePeerConnection, // Allow manual initialization if needed
+    initializePeerConnection,
     createOffer,
     handleOffer,
     handleAnswer,
     handleCandidate,
-    closeConnection,
+    closeConnection, // Expose the cleanup function
   };
 };
 

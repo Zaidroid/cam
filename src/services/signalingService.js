@@ -11,6 +11,7 @@ class SignalingService {
     this.myId = null; // Will be set upon initialization, e.g., user ID
     this.waitingPoolChannel = null;
     this.onPairedCallback = null; // Callback when paired with another user
+    this.isPairingInProgress = false; // Flag to prevent multiple pairing attempts
   }
 
   // Initialize with user ID and callbacks
@@ -18,12 +19,13 @@ class SignalingService {
     this.myId = userId;
     this.onSignalMessage = onSignalMessageCallback;
     this.onPairedCallback = onPairedCallback;
+    this.isPairingInProgress = false; // Reset on init
     console.log(`SignalingService initialized for user: ${this.myId}`);
   }
 
   joinWaitingPool() {
-    if (this.waitingPoolChannel) {
-      console.log('SignalingService: Already in or joining waiting pool.');
+    if (this.waitingPoolChannel || this.isPairingInProgress) {
+      console.log('SignalingService: Already in/joining waiting pool or pairing in progress.');
       return;
     }
     const poolName = 'public:waiting_pool';
@@ -34,29 +36,23 @@ class SignalingService {
 
     this.waitingPoolChannel
       .on('presence', { event: 'sync' }, () => {
-        if (!this.waitingPoolChannel) return; // Channel might have been left
+        if (!this.waitingPoolChannel || this.isPairingInProgress) return;
 
         const presenceState = this.waitingPoolChannel.presenceState();
         console.log(`SignalingService: Presence update on ${poolName}:`, presenceState);
         
         const otherUsers = Object.keys(presenceState).filter(id => id !== this.myId);
         
-        if (otherUsers.length > 0 && !this.currentChannel) { // Not already in a chat
-          const partnerId = otherUsers[0]; // Simplistic: pick the first one
-          console.log(`SignalingService: Found potential partner ${partnerId} in waiting pool.`);
-          
-          // Leave waiting pool and initiate pairing
-          // This is a very basic client-side matchmaking.
-          // A more robust solution would use a server function to coordinate.
-          this.leaveWaitingPool(); // Important to leave before joining new room
+        if (otherUsers.length > 0 && !this.currentChannel) { 
+          this.isPairingInProgress = true; // Set flag
+          const partnerId = otherUsers[0]; 
+          console.log(`SignalingService: Found potential partner ${partnerId}. Notifying app.`);
           
           const chatRoomId = `private:chat_room_${[this.myId, partnerId].sort().join('_')}`;
-          this.joinChatRoom(chatRoomId);
-
-          // Notify app that we are paired and who should offer
-          // Simple rule: user with lexicographically smaller ID offers
           const shouldOffer = this.myId < partnerId;
+
           if (this.onPairedCallback) {
+            // App.jsx will call leaveWaitingPool and joinChatRoom
             this.onPairedCallback({ partnerId, chatRoomId, shouldOffer });
           }
         }
@@ -74,8 +70,16 @@ class SignalingService {
   leaveWaitingPool() {
     if (this.waitingPoolChannel) {
       console.log('SignalingService: Leaving waiting pool.');
-      this.client.removeChannel(this.waitingPoolChannel);
-      this.waitingPoolChannel = null;
+      // It's good practice to unsubscribe before removing the channel
+      this.waitingPoolChannel.unsubscribe()
+        .then(() => console.log('SignalingService: Unsubscribed from waiting pool.'))
+        .catch(err => console.error('SignalingService: Error unsubscribing from waiting pool:', err))
+        .finally(() => {
+          this.client.removeChannel(this.waitingPoolChannel);
+          this.waitingPoolChannel = null;
+          // Reset pairing flag if we are leaving the pool for reasons other than successful pairing
+          // However, App.jsx should manage isPairingInProgress reset more explicitly if needed
+        });
     }
   }
   
@@ -86,16 +90,13 @@ class SignalingService {
         return;
     }
     if (this.currentChannel) {
-      this.leaveChatRoom(); // Leave previous chat room if any
+      this.leaveChannel(); // Leave previous chat room if any
     }
     
-    // Ensure we are not in the waiting pool anymore
-    this.leaveWaitingPool();
-
     console.log(`SignalingService: Joining chat room ${channelName}`);
     this.currentChannel = this.client.channel(channelName, {
       config: {
-        presence: { key: this.myId }, // Announce presence in the chat room
+        presence: { key: this.myId }, 
       },
     });
 
@@ -112,12 +113,11 @@ class SignalingService {
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
           console.log(`SignalingService: Successfully subscribed to ${channelName}`);
-          // Track presence
+          this.isPairingInProgress = false; // Successfully joined chat room, reset pairing flag
           await this.currentChannel.track({ online_at: new Date().toISOString(), user_id: this.myId });
-        } else if (status === 'CHANNEL_ERROR') {
-          console.error(`SignalingService: Error subscribing to channel ${channelName}`);
-        } else if (status === 'TIMED_OUT') {
-          console.warn(`SignalingService: Subscription to ${channelName} timed out`);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          console.error(`SignalingService: Error/Timeout subscribing to ${channelName}: ${status}`);
+          this.isPairingInProgress = false; // Reset pairing flag on error
         }
       });
   }
@@ -132,20 +132,24 @@ class SignalingService {
     this.currentChannel.send({
       type: 'broadcast',
       event: 'webrtc_signal',
-      payload: { ...signalData, from: this.myId }, // Add sender's ID
+      payload: { ...signalData, from: this.myId }, 
     });
   }
 
-  // Leave the current channel
+  // Leave the current chat channel
   leaveChannel() {
     if (this.currentChannel) {
       console.log(`SignalingService: Leaving channel ${this.currentChannel.topic}`);
-      this.client.removeChannel(this.currentChannel);
-      this.currentChannel = null;
+      this.currentChannel.unsubscribe()
+      .then(() => console.log(`SignalingService: Unsubscribed from ${this.currentChannel.topic}`))
+      .catch(err => console.error(`SignalingService: Error unsubscribing from ${this.currentChannel.topic}:`, err))
+      .finally(() => {
+        this.client.removeChannel(this.currentChannel);
+        this.currentChannel = null;
+        this.isPairingInProgress = false; // Reset pairing flag
+      });
     }
   }
-
-  // More methods will be added for matchmaking, etc.
 }
 
 // Export a singleton instance

@@ -113,12 +113,23 @@ function App() {
   };
 
   const handlePaired = ({ partnerId, chatRoomId, shouldOffer }) => {
-    console.log(`App: Paired with ${partnerId}. Joining room: ${chatRoomId}. Should offer: ${shouldOffer}`);
-    setChatPartnerId(partnerId);
-    setIsSearching(false); // No longer searching once paired
+    console.log(`App: Paired with ${partnerId}. Transitioning to room: ${chatRoomId}. Should offer: ${shouldOffer}`);
+    
+    signalingService.leaveWaitingPool(); // Instruct service to leave the waiting pool
+    signalingService.joinChatRoom(chatRoomId); // Instruct service to join the designated chat room
 
-    // Signaling service already joins the chat room internally upon pairing.
-    // We just need to initialize peer connection and potentially offer.
+    setChatPartnerId(partnerId);
+    setIsSearching(false); // No longer searching
+
+    // Ensure local stream is ready before initializing peer connection
+    if (!localStream) {
+      console.error("App: Cannot proceed with pairing, local stream not available.");
+      setError("Local stream not ready for WebRTC connection. Please check camera/mic.");
+      // Potentially reset pairing state here or in signalingService
+      signalingService.isPairingInProgress = false; // Allow new pairing attempts
+      return;
+    }
+
     const pc = initializePeerConnection();
     if (pc && shouldOffer) {
       console.log("App: Designated to create offer.");
@@ -151,7 +162,7 @@ function App() {
   const handleStopSearchOrChat = () => {
     setIsSearching(false);
     setChatPartnerId(null);
-    signalingService.leaveChatRoom(); // Renamed from leaveChannel for clarity
+    signalingService.leaveChannel(); // Corrected method name
     signalingService.leaveWaitingPool();
     closeConnection(); // Close WebRTC peer connection
     console.log('App: Stopped search/chat.');
