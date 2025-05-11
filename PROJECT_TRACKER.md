@@ -118,9 +118,9 @@ arab-connect/
 ### Phase 1: Core WebRTC & Signaling (Proof of Concept)
 *   [X] **Local Video Display:**
     *   [X] Implement `getUserMedia` to access camera/microphone and display local video stream.
-*   [ ] **WebRTC Connection Logic (`useWebRTC.js` hook):**
-    *   [ ] `RTCPeerConnection` setup.
-    *   [ ] STUN/TURN server configuration (using `turn.zaidlab.xyz`).
+*   [X] **WebRTC Connection Logic (`useWebRTC.js` hook):**
+    *   [X] `RTCPeerConnection` setup.
+    *   [X] STUN/TURN server configuration (using `turn.zaidlab.xyz`).
         ```javascript
         // Example iceServers config
         const iceServers = [
@@ -128,15 +128,15 @@ arab-connect/
             { urls: 'stun:stun1.l.google.com:19302' },
             {
                 urls: 'turn:turn.zaidlab.xyz:3478', // Ensure port matches Coturn & Tunnel
-                username: 'your_turn_username',
-                credential: 'your_turn_password',
+                username: 'your_turn_username', // Replace with actual username
+                credential: 'your_turn_password', // Replace with actual password
             }
         ];
         ```
-    *   [ ] Creating offers/answers.
-    *   [ ] Handling ICE candidates.
-*   [ ] **Signaling Logic (`signalingService.js` using Supabase Realtime):**
-    *   [ ] Connect to Supabase client.
+    *   [X] Creating offers/answers.
+    *   [X] Handling ICE candidates.
+*   [X] **Signaling Logic (`signalingService.js` using Supabase Realtime):**
+    *   [X] Connect to Supabase client.
     *   [ ] Implement logic to join/leave `public:waiting_pool` channel with presence.
     *   [ ] Implement logic for creating/joining `private:chat_room_[id]_[id]` channels.
     *   [ ] Send/receive signaling messages (offer, answer, ICE, pairing notifications) via broadcast on chat room channels.
