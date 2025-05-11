@@ -77,12 +77,10 @@ class SignalingService {
         console.log('SignalingService: Successfully unsubscribed from waiting pool.');
       } catch (err) {
         console.error('SignalingService: Error unsubscribing from waiting pool:', err);
-        // Potentially throw err or handle as needed
       }
-      // removeChannel is synchronous
-      this.client.removeChannel(channelToLeave);
-      console.log('SignalingService: Waiting pool channel instance removed.');
-      // isPairingInProgress should be managed by the calling context (App.jsx) or upon successful room join
+      // Not calling this.client.removeChannel(channelToLeave) anymore to keep WebSocket potentially alive.
+      // The channel object is nulled, so we won't use this instance again.
+      console.log('SignalingService: Unsubscribed from waiting pool. Channel object nulled.');
     } else {
       console.log('SignalingService: No waiting pool channel to leave or already left.');
     }
@@ -171,8 +169,8 @@ class SignalingService {
       } catch (err) {
         console.error(`SignalingService: Error unsubscribing from ${channelToLeave.topic}:`, err);
       }
-      this.client.removeChannel(channelToLeave);
-      console.log(`SignalingService: Chat channel instance removed for ${channelToLeave.topic}.`);
+      // Not calling this.client.removeChannel(channelToLeave) anymore.
+      console.log(`SignalingService: Unsubscribed from chat channel ${channelToLeave.topic}. Channel object nulled.`);
     } else {
         console.log('SignalingService: No current chat channel to leave.');
     }
