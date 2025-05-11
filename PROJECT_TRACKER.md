@@ -89,11 +89,11 @@ arab-connect/
 ## IV. Development Phases & Tasks
 
 ### Phase 0: Setup & Local Hosting
-*   [ ] **Project Setup:**
+*   [X] **Project Setup:**
     *   [X] Create GitHub repository (e.g., `arab-connect`).
-    *   [ ] Create Supabase project.
-    *   [ ] Setup Netlify site linked to GitHub for `vid.zaidlab.xyz`.
-    *   [ ] Configure Cloudflare DNS for `vid.zaidlab.xyz` (CNAME to Netlify) and `turn.zaidlab.xyz` (for Cloudflare Tunnel).
+    *   [X] Create Supabase project.
+    *   [X] Setup Netlify site linked to GitHub for `vid.zaidlab.xyz`.
+    *   [X] Configure Cloudflare DNS for `vid.zaidlab.xyz` (CNAME to Netlify) and `turn.zaidlab.xyz` (for Cloudflare Tunnel).
 *   [X] **Local Environment Setup (Linux Machine - 192.168.0.108):**
     *   [ ] Install Node.js (if needed for any local tooling).
     *   [X] Install Coturn: `sudo apt-get install coturn`.
@@ -116,8 +116,8 @@ arab-connect/
     *   [X] Basic project structure (folders as per section III).
 
 ### Phase 1: Core WebRTC & Signaling (Proof of Concept)
-*   [ ] **Local Video Display:**
-    *   [ ] Implement `getUserMedia` to access camera/microphone and display local video stream.
+*   [X] **Local Video Display:**
+    *   [X] Implement `getUserMedia` to access camera/microphone and display local video stream.
 *   [ ] **WebRTC Connection Logic (`useWebRTC.js` hook):**
     *   [ ] `RTCPeerConnection` setup.
     *   [ ] STUN/TURN server configuration (using `turn.zaidlab.xyz`).
