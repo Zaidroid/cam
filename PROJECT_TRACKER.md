@@ -128,8 +128,8 @@ arab-connect/
             { urls: 'stun:stun1.l.google.com:19302' },
             {
                 urls: 'turn:turn.zaidlab.xyz:3478', // Ensure port matches Coturn & Tunnel
-                username: 'your_turn_username', // Replace with actual username
-                credential: 'your_turn_password', // Replace with actual password
+                username: 'user', // Using 'user' with static-auth-secret
+                credential: '[YOUR_STATIC_AUTH_SECRET]', // Actual secret is in useWebRTC.js
             }
         ];
         ```

@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-// Placeholder for TURN server credentials - replace with your actual credentials
-// It's best to load these from environment variables in a real app
-const TURN_USERNAME = 'your_turn_username'; // Replace this
-const TURN_PASSWORD = 'your_turn_password'; // Replace this
+// TURN server credentials from static-auth-secret
+const TURN_USERNAME = 'user'; // A generic username, as static-auth-secret is used
+const TURN_PASSWORD = '43871edb5bb8d27414e4ba071b230d2cd1f88b8f2876fbc5801c5b2c8a8bd382'; // Your static-auth-secret
 
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
