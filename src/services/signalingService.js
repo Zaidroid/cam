@@ -67,59 +67,81 @@ class SignalingService {
       });
   }
 
-  leaveWaitingPool() {
+  async leaveWaitingPool() { // Made async
     if (this.waitingPoolChannel) {
-      console.log('SignalingService: Leaving waiting pool.');
-      // It's good practice to unsubscribe before removing the channel
-      this.waitingPoolChannel.unsubscribe()
-        .then(() => console.log('SignalingService: Unsubscribed from waiting pool.'))
-        .catch(err => console.error('SignalingService: Error unsubscribing from waiting pool:', err))
-        .finally(() => {
-          this.client.removeChannel(this.waitingPoolChannel);
-          this.waitingPoolChannel = null;
-          // Reset pairing flag if we are leaving the pool for reasons other than successful pairing
-          // However, App.jsx should manage isPairingInProgress reset more explicitly if needed
-        });
+      const channelToLeave = this.waitingPoolChannel;
+      this.waitingPoolChannel = null; // Nullify early to prevent re-entry from presence
+      console.log('SignalingService: Attempting to leave waiting pool.');
+      try {
+        await channelToLeave.unsubscribe();
+        console.log('SignalingService: Successfully unsubscribed from waiting pool.');
+      } catch (err) {
+        console.error('SignalingService: Error unsubscribing from waiting pool:', err);
+        // Potentially throw err or handle as needed
+      }
+      // removeChannel is synchronous
+      this.client.removeChannel(channelToLeave);
+      console.log('SignalingService: Waiting pool channel instance removed.');
+      // isPairingInProgress should be managed by the calling context (App.jsx) or upon successful room join
+    } else {
+      console.log('SignalingService: No waiting pool channel to leave or already left.');
     }
   }
   
-  // Join a specific chat room channel
-  joinChatRoom(channelName) {
+  async joinChatRoom(channelName) { // Made async
     if (this.currentChannel && this.currentChannel.topic === channelName) {
-        console.log(`SignalingService: Already in channel ${channelName}`);
-        return;
+      console.log(`SignalingService: Already in channel ${channelName}`);
+      this.isPairingInProgress = false; // Already in room, so pairing is complete/moot
+      return; // Or return success
     }
     if (this.currentChannel) {
-      this.leaveChannel(); // Leave previous chat room if any
+      await this.leaveChannel(); // Ensure previous chat room is left, made leaveChannel async
     }
     
     console.log(`SignalingService: Joining chat room ${channelName}`);
     this.currentChannel = this.client.channel(channelName, {
-      config: {
-        presence: { key: this.myId }, 
-      },
+      config: { presence: { key: this.myId } },
     });
 
-    this.currentChannel
-      .on('broadcast', { event: 'webrtc_signal' }, ({ payload }) => {
-        if (payload.from && payload.from === this.myId) {
+    // Setup handlers BEFORE subscribing
+    this.currentChannel.on('broadcast', { event: 'webrtc_signal' }, ({ payload }) => {
+      if (payload.from && payload.from === this.myId) {
+        return;
+      }
+      console.log('SignalingService: Received webrtc_signal:', payload);
+      if (this.onSignalMessage) {
+        this.onSignalMessage(payload);
+      }
+    });
+
+    // Make subscription awaitable
+    const subscribeStatus = await new Promise((resolve) => {
+      this.currentChannel.subscribe((status, err) => {
+        if (err) {
+          console.error(`SignalingService: Subscription error for ${channelName}:`, err.message);
+          resolve('CHANNEL_ERROR'); // Treat error as a status
           return;
         }
-        console.log('SignalingService: Received webrtc_signal:', payload);
-        if (this.onSignalMessage) {
-          this.onSignalMessage(payload);
-        }
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          console.log(`SignalingService: Successfully subscribed to ${channelName}`);
-          this.isPairingInProgress = false; // Successfully joined chat room, reset pairing flag
-          await this.currentChannel.track({ online_at: new Date().toISOString(), user_id: this.myId });
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.error(`SignalingService: Error/Timeout subscribing to ${channelName}: ${status}`);
-          this.isPairingInProgress = false; // Reset pairing flag on error
+        // Resolve only on final states or if already subscribed
+        if (status === 'SUBSCRIBED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          resolve(status);
+        } else if (status === 'CLOSED') {
+            console.warn(`SignalingService: Channel ${channelName} was closed during subscription.`);
+            resolve('CLOSED'); // Potentially a state to handle
         }
       });
+    });
+
+    if (subscribeStatus === 'SUBSCRIBED') {
+      console.log(`SignalingService: Successfully subscribed to ${channelName}`);
+      this.isPairingInProgress = false; 
+      await this.currentChannel.track({ online_at: new Date().toISOString(), user_id: this.myId });
+    } else {
+      console.error(`SignalingService: Failed to subscribe to ${channelName}: ${subscribeStatus}`);
+      this.isPairingInProgress = false; 
+      this.currentChannel = null; // Ensure currentChannel is null if subscription failed
+      throw new Error(`Failed to subscribe to chat room: ${subscribeStatus}`);
+    }
   }
 
   // Send a signaling message
@@ -137,17 +159,22 @@ class SignalingService {
   }
 
   // Leave the current chat channel
-  leaveChannel() {
+  async leaveChannel() { // Made async
     if (this.currentChannel) {
-      console.log(`SignalingService: Leaving channel ${this.currentChannel.topic}`);
-      this.currentChannel.unsubscribe()
-      .then(() => console.log(`SignalingService: Unsubscribed from ${this.currentChannel.topic}`))
-      .catch(err => console.error(`SignalingService: Error unsubscribing from ${this.currentChannel.topic}:`, err))
-      .finally(() => {
-        this.client.removeChannel(this.currentChannel);
-        this.currentChannel = null;
-        this.isPairingInProgress = false; // Reset pairing flag
-      });
+      const channelToLeave = this.currentChannel;
+      this.currentChannel = null; // Nullify early
+      this.isPairingInProgress = false; // Reset pairing flag generally when leaving a chat
+      console.log(`SignalingService: Attempting to leave channel ${channelToLeave.topic}`);
+      try {
+        await channelToLeave.unsubscribe();
+        console.log(`SignalingService: Successfully unsubscribed from ${channelToLeave.topic}`);
+      } catch (err) {
+        console.error(`SignalingService: Error unsubscribing from ${channelToLeave.topic}:`, err);
+      }
+      this.client.removeChannel(channelToLeave);
+      console.log(`SignalingService: Chat channel instance removed for ${channelToLeave.topic}.`);
+    } else {
+        console.log('SignalingService: No current chat channel to leave.');
     }
   }
 }

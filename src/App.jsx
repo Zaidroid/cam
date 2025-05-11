@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import LocalVideoView from './components/ChatView/LocalVideoView';
 import signalingService from './services/signalingService';
 import useWebRTC from './hooks/useWebRTC';
@@ -12,24 +12,13 @@ function App() {
   const [error, setError] = useState(null);
   const [isSearching, setIsSearching] = useState(false);
   const [chatPartnerId, setChatPartnerId] = useState(null); 
-  const [pendingPairingData, setPendingPairingData] = useState(null); // To hold pairing data if localStream isn't ready
+  const [pendingPairingData, setPendingPairingData] = useState(null);
+  const [queuedSignals, setQueuedSignals] = useState([]);
 
   const remoteVideoRef = useRef(null);
-
-  // Initialize signaling service
-  useEffect(() => {
-    signalingService.initialize(MY_USER_ID, handleSignalMessage, handlePaired);
-    return () => {
-      signalingService.leaveChannel(); // General cleanup for any active channel
-      signalingService.leaveWaitingPool(); // Specific cleanup for waiting pool
-    };
-  }, []); // Empty dependency array means this runs once on mount and cleans up on unmount
   
   const {
-    // peerConnection, // Direct access if needed, but usually through methods
     remoteStream,
-    // isConnecting, // WebRTC connection status
-    // isConnected,  // WebRTC connection status
     initializePeerConnection,
     createOffer,
     handleOffer,
@@ -37,7 +26,6 @@ function App() {
     handleCandidate,
     closeConnection,
   } = useWebRTC(localStream, signalingService);
-
 
   // Get local media stream
   useEffect(() => {
@@ -58,9 +46,9 @@ function App() {
       if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
       }
-      closeConnection(); // Close WebRTC connection on unmount
+      closeConnection();
     };
-  }, []); // Run once on mount
+  }, [closeConnection]); // Added closeConnection as it's a stable callback from useWebRTC
 
   // Effect to set remote stream to video element
   useEffect(() => {
@@ -69,54 +57,20 @@ function App() {
     }
   }, [remoteStream]);
 
-  // Effect to process pending pairing data once localStream is available
-  useEffect(() => {
-    if (localStream && pendingPairingData) {
-      console.log("App: localStream and pendingPairingData ready, proceeding with WebRTC setup.");
-      const { partnerId, chatRoomId, shouldOffer } = pendingPairingData;
-      
-      // Signaling service should have already joined chatRoomId via handlePaired.
-      // Now, initialize WebRTC connection.
-      const pc = initializePeerConnection();
-      if (pc && shouldOffer) {
-        console.log("App: Designated to create offer (from useEffect).");
-        createOffer();
-      } else if (pc) {
-        console.log("App: Waiting for offer from partner (from useEffect).");
-      }
-      // else: pc is null, initializePeerConnection logged a warning, error should be shown.
-      
-      setPendingPairingData(null); // Clear pending data
-      // signalingService.isPairingInProgress should be reset by signalingService itself
-      // once it successfully subscribes to the chat room or if it fails.
-    }
-  }, [localStream, pendingPairingData, initializePeerConnection, createOffer]);
-
-
-  const handleSignalMessage = (signal) => {
-    console.log('App: Received signal:', signal);
-    if (!localStream && !['offer', 'answer', 'candidate'].includes(signal.type)) {
-      // Allow non-WebRTC signals even if localStream isn't ready (e.g. pairing messages)
-      // But for actual WebRTC SDP/ICE, localStream (and thus peerConnection) is needed.
-    } else if (!localStream && ['offer', 'answer', 'candidate'].includes(signal.type)) {
-      console.warn("App: Received WebRTC signal but local stream is not ready yet. Ignoring.");
+  // Centralized WebRTC signal processing logic
+  const processWebRTCSignal = useCallback((signal) => {
+    console.log('App: Processing WebRTC signal:', signal.type);
+    const pc = initializePeerConnection(); // initializePeerConnection is from useWebRTC, depends on localStream
+    if (!pc) {
+      console.error("App: PeerConnection could not be initialized for WebRTC signal. LocalStream might still be null in useWebRTC's scope.", signal);
+      setError("Failed to initialize video connection. Please try again or check permissions.");
       return;
-    }
-    
-    // Initialize PC only if we have a local stream and it's a relevant signal type
-    let pc = null;
-    if (localStream && ['offer', 'answer', 'candidate'].includes(signal.type)) {
-        pc = initializePeerConnection(); 
-        if (!pc) {
-            console.error("App: PeerConnection could not be initialized for WebRTC signal.");
-            return;
-        }
     }
 
     switch (signal.type) {
       case 'offer':
         handleOffer(signal.sdp);
-        setChatPartnerId(signal.from); // Assuming 'from' contains the partner's ID
+        if (!chatPartnerId) setChatPartnerId(signal.from); 
         break;
       case 'answer':
         handleAnswer(signal.sdp);
@@ -124,42 +78,87 @@ function App() {
       case 'candidate':
         handleCandidate(signal.candidate);
         break;
-      // Add other signal types like 'user-joined', 'user-left', 'paired' as needed
-      case 'paired': // Example: a custom signal from matchmaking
-        console.log('App: Paired with user:', signal.partnerId);
-        setChatPartnerId(signal.partnerId);
-        // The offering client (e.g., determined by matchmaking) would call createOffer
-        // For simplicity, let's assume this client is the one to make the offer if it's paired.
-        // In a real app, one client would be designated as the offerer.
-        // This case is now handled by onPairedCallback
-        // if (signal.shouldOffer) { 
-        //      createOffer();
-        // }
-        break;
       default:
-        console.warn('App: Unknown signal type received:', signal.type);
+        console.warn('App: Unknown signal type in processWebRTCSignal:', signal.type);
     }
-  };
+  }, [initializePeerConnection, handleOffer, handleAnswer, handleCandidate, chatPartnerId, setChatPartnerId]); // localStream is an indirect dependency via initializePeerConnection
 
-  const handlePaired = ({ partnerId, chatRoomId, shouldOffer }) => {
+  // Effect to process queued signals once localStream is available in App's state
+  useEffect(() => {
+    if (localStream && queuedSignals.length > 0) {
+      console.log(`App: localStream ready. Processing ${queuedSignals.length} queued signal(s).`);
+      const signalsToProcess = [...queuedSignals];
+      setQueuedSignals([]); 
+      signalsToProcess.forEach(signal => processWebRTCSignal(signal));
+    }
+  }, [localStream, queuedSignals, processWebRTCSignal]);
+  
+  // Effect to process pending pairing data once localStream is available
+  useEffect(() => {
+    if (localStream && pendingPairingData) {
+      console.log("App: localStream & pendingPairingData ready. Processing WebRTC setup for pairing.");
+      const { partnerId, chatRoomId, shouldOffer } = pendingPairingData;
+      
+      // Note: signalingService.joinChatRoom was already called in handlePaired
+      const pc = initializePeerConnection();
+      if (pc && shouldOffer) {
+        console.log("App: Designated to create offer (from pending pairing data).");
+        createOffer();
+      } else if (pc) {
+        console.log("App: Waiting for offer from partner (from pending pairing data).");
+      } else {
+         console.error("App: PC initialization failed during pending pairing processing.");
+         setError("Failed to set up video connection after pairing.");
+      }
+      setPendingPairingData(null);
+      // isPairingInProgress is managed by signalingService
+    }
+  }, [localStream, pendingPairingData, initializePeerConnection, createOffer]);
+
+  // Initial handler for signals from signalingService
+  const handleSignalMessage = useCallback((signal) => {
+    console.log('App: Received signal from Supabase:', signal);
+    if (['offer', 'answer', 'candidate'].includes(signal.type)) {
+      if (!localStream) { // Check localStream state directly in App.jsx
+        console.warn("App: WebRTC signal received, but localStream (App state) not ready. Queueing signal.");
+        setQueuedSignals(prev => [...prev, signal]);
+        return;
+      }
+      processWebRTCSignal(signal);
+    } else if (signal.type === 'paired') {
+      console.warn("App: 'paired' signal received via generic onSignalMessage. Should be via onPairedCallback.");
+      // Potentially call handlePaired if this path is ever hit, though it shouldn't be.
+      // handlePaired(signal); 
+    } else {
+      console.warn('App: Unknown or non-WebRTC signal type received in handleSignalMessage:', signal.type);
+    }
+  }, [localStream, processWebRTCSignal, setQueuedSignals]); // Dependencies
+
+  const handlePaired = useCallback(async ({ partnerId, chatRoomId, shouldOffer }) => {
     console.log(`App: Paired callback triggered for partner ${partnerId}, room ${chatRoomId}, shouldOffer: ${shouldOffer}`);
     
-    // App tells signaling service to transition channels
-    signalingService.leaveWaitingPool(); 
-    signalingService.joinChatRoom(chatRoomId); 
-
-    setChatPartnerId(partnerId); // Update UI state
-    setIsSearching(false); 
-
-    if (!localStream) {
-      console.warn("App: localStream not ready when handlePaired called. Setting pendingPairingData.");
-      setError("Preparing video chat... If this persists, check camera/mic permissions.");
-      setPendingPairingData({ partnerId, chatRoomId, shouldOffer });
-      // isPairingInProgress in signalingService remains true
+    try {
+      await signalingService.leaveWaitingPool(); 
+      await signalingService.joinChatRoom(chatRoomId); 
+    } catch (err) {
+      console.error("App: Error during channel transition in handlePaired:", err);
+      setError(`Failed to switch to chat room: ${err.message}. Please try searching again.`);
+      setIsSearching(false); 
+      setChatPartnerId(null);
+      if (signalingService) signalingService.isPairingInProgress = false;
       return;
     }
 
-    // If localStream is already available
+    setChatPartnerId(partnerId); 
+    setIsSearching(false); 
+
+    if (!localStream) { // Check localStream state directly
+      console.warn("App: localStream (App state) not ready when handlePaired called. Setting pendingPairingData.");
+      setError("Preparing video chat... If this persists, check camera/mic permissions.");
+      setPendingPairingData({ partnerId, chatRoomId, shouldOffer });
+      return;
+    }
+
     console.log("App: localStream available in handlePaired. Proceeding with WebRTC setup.");
     const pc = initializePeerConnection();
     if (pc && shouldOffer) {
@@ -167,40 +166,50 @@ function App() {
       createOffer();
     } else if (pc) {
       console.log("App: Waiting for offer from partner (from handlePaired direct).");
+    } else {
+        console.error("App: PC initialization failed in handlePaired direct.");
+        setError("Failed to set up video connection after pairing.");
     }
-    // If pc is null here, initializePeerConnection would have logged a warning.
-    // signalingService.isPairingInProgress will be set to false by the service itself
-    // upon successful subscription to chatRoom or on error.
-  };
+  }, [localStream, initializePeerConnection, createOffer, setError, setChatPartnerId, setIsSearching, setPendingPairingData]); // Dependencies
 
-  const handleStartSearch = () => {
+  // Initialize signaling service - moved handlePaired and handleSignalMessage to useCallback
+  useEffect(() => {
+    signalingService.initialize(MY_USER_ID, handleSignalMessage, handlePaired);
+    return () => {
+      // Ensure these are called if the service exists
+      if (signalingService) {
+        signalingService.leaveChannel(); 
+        signalingService.leaveWaitingPool();
+      }
+    };
+  }, [handleSignalMessage, handlePaired]); // Now depends on memoized handlers
+
+
+  const handleStartSearch = async () => { // Made async
     if (!localStream) {
       setError("Cannot start search: Local media (camera/microphone) is not available.");
       return;
     }
-    // Reset previous connection state if any
-    handleStopSearchOrChat(); 
-
+    await handleStopSearchOrChat(); // Added await
     setIsSearching(true);
     setError(null);
     console.log('App: Starting search...');
     signalingService.joinWaitingPool();
-    
-    // Matchmaking is now handled by presence updates in signalingService.
-    // No need for setTimeout or naive offer creation here.
-    
-    // Initialize peer connection early, so it's ready when pairing happens
-    // initializePeerConnection(); // This is now called within handleSignalMessage or handlePaired
   };
   
-  const handleStopSearchOrChat = () => {
+  const handleStopSearchOrChat = useCallback(async () => { // Made async
     setIsSearching(false);
     setChatPartnerId(null);
-    signalingService.leaveChannel(); // Corrected method name
-    signalingService.leaveWaitingPool();
-    closeConnection(); // Close WebRTC peer connection
+    setPendingPairingData(null); 
+    setQueuedSignals([]); 
+    if (signalingService) {
+        await signalingService.leaveChannel(); // Added await
+        await signalingService.leaveWaitingPool(); // Added await
+        signalingService.isPairingInProgress = false; 
+    }
+    closeConnection(); 
     console.log('App: Stopped search/chat.');
-  };
+  }, [closeConnection, signalingService]); // Added signalingService to dependencies
 
 
   if (error) {
